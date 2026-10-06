@@ -290,6 +290,13 @@ dialog::backdrop{background:rgba(20,6,2,.6)}
 .bordrow button{flex:0 0 auto;width:66px;border-radius:12px;border:1px solid var(--line);background:var(--surface);padding:4px;display:grid;gap:2px;font-size:.72rem;font-weight:600;text-align:center}
 .bordrow canvas{width:56px;height:70px;display:block;margin:0 auto;border-radius:4px}
 .bordrow button[aria-checked="true"]{border-color:var(--accent);box-shadow:inset 0 0 0 2px var(--accent)}
+
+.hqnote{margin-top:10px;padding:12px 14px;border-radius:14px;background:var(--accent-soft);border:1px solid var(--accent);display:flex;gap:10px;align-items:flex-start}
+.hqnote p{margin:0;white-space:pre-wrap;line-height:1.45}
+.hqnote button{margin-left:auto;flex:0 0 auto;border:0;background:none;font-size:1.1rem;color:var(--ink-2);min-width:36px;min-height:36px}
+.packitem{display:flex;gap:10px;align-items:center;padding:8px;border:1px solid var(--line);border-radius:12px;margin-top:8px;background:var(--surface)}
+.packitem img{width:44px;height:55px;object-fit:cover;border-radius:6px}
+.packitem input{width:22px;height:22px;accent-color:var(--accent)}
 </style>
 </head>
 <body>
@@ -382,6 +389,12 @@ dialog::backdrop{background:rgba(20,6,2,.6)}
       </div>
       <div class="scroller" id="events" role="group" aria-label="Event templates"></div>
       <p class="note">Picking an event fills in the title, message and colours. Every word stays editable.</p>
+      <div id="officialBox" hidden>
+        <h3>From ashram HQ</h3>
+        <div class="hqnote" id="hqNotice" hidden><span aria-hidden="true">📢</span><p id="hqNoticeText"></p><button type="button" id="hqNoticeClose" aria-label="Hide this notice">✕</button></div>
+        <div class="tplrow" id="officialRow"></div>
+        <p class="note" id="officialNote"></p>
+      </div>
       <h3>Ready-made designs</h3>
       <p class="note">Tap a design to apply its look. Your date, venue, photos and logo stay as they are.</p>
       <div class="tplrow" id="tplRow"></div>
@@ -522,6 +535,13 @@ dialog::backdrop{background:rgba(20,6,2,.6)}
       <p class="note" id="lockStatus"></p>
       <div id="unlockBox" class="field"><label for="pinIn">Ashram HQ PIN</label><div class="eb-row"><input id="pinIn" type="password" inputmode="numeric" autocomplete="off" style="flex:1 1 140px"><button type="button" class="btn" id="unlockBtn">Unlock</button></div></div>
       <div class="links"><button type="button" class="link" id="relockBtn" hidden>Lock again on this device</button></div>
+      <div id="hqPackBox" hidden>
+        <h3>HQ: publish official designs to all branches</h3>
+        <p class="note">1. Make each official poster and save it in My posters. 2. Tick the ones to share below. 3. Download the design pack and upload <b>designpack.json</b> to GitHub, next to index.html. Branches see the designs within a few minutes. A new pack replaces the old one, so tick everything you still want shared.</p>
+        <div id="packList"></div>
+        <div class="field"><label for="packNotice">Notice for all branches (optional)</label><textarea id="packNotice" rows="2" placeholder="For example: Guru Purnima poster is ready. Please use the official design."></textarea></div>
+        <div class="eb-row" style="margin-top:10px"><button type="button" class="btn primary" id="packBtn" style="flex:0 1 auto">Download design pack</button></div>
+      </div>
       <h3>Version</h3>
       <p class="note" id="verNote"></p>
     </details>
@@ -550,7 +570,7 @@ const DEFAULT_LOGO='data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAA4QAAAOECAYAAA
 const defaultLogo=new Image();
 
 /* ================= Content ================= */
-const APP_VERSION='2.4';
+const APP_VERSION='2.5';
 const APP_DATE='October 2026';
 const LOCK={on:true,hash:2399215718};
 const SIZES={
@@ -1762,7 +1782,7 @@ function fnv(t){let h=0x811c9dc5;const b=new TextEncoder().encode(t);for(let i=0
 let adminOK=false;try{adminOK=localStorage.getItem(KEY+':hq')==='1';}catch(e){}
 function isLocked(){return LOCK.on&&!adminOK;}
 function enforceLock(){if(!isLocked())return;const B=BRAND[st.lang]||BRAND.hi;st.ashram=B.ashram;st.blessing=B.blessing;delete st.colors.header;delete st.hidden.header;delete st.hidden.blessing;if(imgs.logo){imgs.logo=null;imgData.logo='';imgs.logoT=imgData.logoT=false;}}
-function updateLockUI(){
+function updateLockUI(){if(typeof renderPackList==='function'&&$('#setPanel').open)setTimeout(renderPackList,0);
   const L=isLocked();['f-ashram','f-blessing'].forEach(id=>{const el=$('#'+id);el.disabled=L;el.title=L?'Locked by ashram HQ':'';});
   $('#file-logo').disabled=L;$('#pick-logo').style.opacity=L?'0.6':'';$('#pick-logo').style.pointerEvents=L?'none':'';
   $('#lockStatus').textContent=!LOCK.on?'The lock is switched off in this copy.':L?'Locked. The ashram name, top line and logo are fixed so every branch uses the official versions. Branches can still change their branch line, event details, colours and everything else.':'Unlocked on this device for ashram HQ. You can change the official name, top line and logo here.';
@@ -2093,8 +2113,56 @@ function pumpTpl(){if(!tplQueue.length)return;const[t,c]=tplQueue.shift();
     const x=c.getContext('2d'),k=c.width/1080;RS=k;x.setTransform(k,0,0,k,0,0);drawPoster(x,1080,1350,null,'portrait');x.setTransform(1,0,0,1,0,0);}catch(e){}finally{st=keep;CUR=keepCUR;RS=keepRS;}
   setTimeout(pumpTpl,16);}
 
+
+/* ================= Official design pack (published by HQ next to index.html) ================= */
+let PACK=null;
+function packURL(){try{return new URL('designpack.json',location.href).href;}catch(e){return null;}}
+async function loadPack(){
+  let pack=null;
+  if(/^https?:$/.test(location.protocol)){try{const r=await fetch(packURL(),{cache:'no-cache'});if(r.ok){const j=await r.json();if(j&&j.app==='ashram-poster-maker'&&j.type==='designpack'){pack=j;kvSet('pack',j).catch(()=>{});}}}catch(e){}}
+  if(!pack){try{pack=await kvGet('pack');}catch(e){}}
+  PACK=pack||null;renderOfficial();
+}
+function renderOfficial(){
+  const box=$('#officialBox');if(!PACK||!Array.isArray(PACK.designs)||(!PACK.designs.length&&!PACK.notice)){box.hidden=true;return;}
+  box.hidden=false;const row=$('#officialRow');row.innerHTML='';
+  PACK.designs.forEach(d=>{const b=document.createElement('button');b.type='button';b.className='tpl';b.innerHTML='<img alt="" style="width:100px;height:125px;object-fit:cover;border-radius:6px;display:block;margin:0 auto;background:var(--stage)"><span></span><small>Official</small>';
+    if(d.thumb)b.querySelector('img').src=d.thumb;b.querySelector('span').textContent=d.name||'Design';b.setAttribute('aria-label','Use official design: '+(d.name||''));b.addEventListener('click',()=>applyOfficial(d));row.appendChild(b);});
+  $('#officialNote').textContent=PACK.designs.length?'Published by HQ on '+new Date(PACK.published).toLocaleDateString('en-IN',{day:'numeric',month:'short',year:'numeric'})+'. Your branch line, contact numbers and bottom line stay your own.':'';
+  let hidden='';try{hidden=localStorage.getItem(KEY+':noticeSeen')||'';}catch(e){}
+  const nt=(PACK.notice||'').trim();$('#hqNotice').hidden=!nt||hidden===String(PACK.published);$('#hqNoticeText').textContent=nt;
+}
+$('#hqNoticeClose').addEventListener('click',()=>{try{localStorage.setItem(KEY+':noticeSeen',String(PACK&&PACK.published));}catch(e){}$('#hqNotice').hidden=true;});
+async function applyOfficial(d){
+  if(!d||!d.st)return;if(!window.confirm('Use the official design "'+(d.name||'')+'"? It replaces the poster you are editing. Your branch line, contact numbers and bottom line are kept.'))return;
+  const keep={branch:st.branch,contact:st.contact,footer:st.footer};
+  for(const ph of (d.photos||[])){if(ph&&ph.id&&ph.data){try{await idbReq('photos','readwrite',s2=>s2.put(ph));}catch(e){}}}
+  libCurrent=null;applyState({st:JSON.parse(JSON.stringify(d.st)),img:d.img||{}});
+  if(keep.branch&&!BRANCH_DEFAULTS.includes(keep.branch))st.branch=keep.branch;if(keep.contact&&!/X{3,}/i.test(keep.contact))st.contact=keep.contact;if(keep.footer&&!FOOTER_DEFAULTS.includes(keep.footer))st.footer=keep.footer;
+  syncInputs();updateUI();schedule();persist();refreshPhotoGrid();window.scrollTo({top:0,behavior:'smooth'});toast('Official design applied. Check the details, then save.',{label:'Undo',fn:()=>undo()});
+}
+const BRANCH_DEFAULTS=[BRAND.hi.branch,BRAND.en.branch],FOOTER_DEFAULTS=[BRAND.hi.footer,BRAND.en.footer];
+async function renderPackList(){
+  const box=$('#hqPackBox');box.hidden=isLocked();if(box.hidden)return;const el=$('#packList');let all=[];try{all=await listPosters()||[];}catch(e){}
+  all.sort((a,b)=>b.savedAt-a.savedAt);el.innerHTML=all.length?'':'<p class="note">Save posters in My posters first. They will appear here to tick.</p>';
+  const inPack=new Set((PACK&&PACK.designs||[]).map(d=>d.id));
+  all.forEach(p=>{const l=document.createElement('label');l.className='packitem';l.innerHTML='<input type="checkbox"><img alt=""><span></span>';l.querySelector('input').value=p.id;l.querySelector('input').checked=inPack.has(p.id);l.querySelector('img').src=p.thumb;l.querySelector('span').textContent=p.name;el.appendChild(l);});
+  if(PACK&&PACK.notice&&!$('#packNotice').value)$('#packNotice').value=PACK.notice;
+}
+$('#packBtn').addEventListener('click',async()=>{
+  const ids=[...document.querySelectorAll('#packList input:checked')].map(i=>i.value),notice=$('#packNotice').value.trim();
+  if(!ids.length&&!notice){toast('Tick at least one poster, or write a notice.');return;}
+  let all=[];try{all=await listPosters()||[];}catch(e){}
+  const designs=all.filter(p=>ids.includes(p.id)),need=new Set();designs.forEach(d=>(d.st.items||[]).forEach(it=>{if(it.type==='image'&&it.imgId)need.add(it.imgId);}));
+  const photos=[];for(const id of need){try{const r=await idbReq('photos','readonly',s2=>s2.get(id));if(r)photos.push(r);}catch(e){}}
+  const pack={app:'ashram-poster-maker',type:'designpack',version:APP_VERSION,published:Date.now(),notice,designs:designs.map(p=>({id:p.id,name:p.name,thumb:p.thumb,st:p.st,img:{p1:p.img.p1||'',p2:p.img.p2||'',bg:p.img.bg||''},photos:photos.filter(ph=>(p.st.items||[]).some(it=>it.imgId===ph.id))}))};
+  const r=await saveFile(new Blob([JSON.stringify(pack)],{type:'application/json'}),'designpack.json','Design pack');
+  if(r==='saved')toast('Design pack saved. Upload designpack.json to GitHub next to index.html.');
+});
+$('#setPanel').addEventListener('toggle',()=>{if($('#setPanel').open)renderPackList();});
+
 /* ================= Start ================= */
-refreshPhotoGrid();renderElGrid();renderBorders();setTimeout(renderTemplates,600);
+refreshPhotoGrid();renderElGrid();renderBorders();loadPack();setTimeout(renderTemplates,600);
 $('#verTag').textContent='v'+APP_VERSION;$('#verNote').textContent='Version '+APP_VERSION+', '+APP_DATE+'. If a branch shows an older version number, ask them to open the latest link.';updateLockUI();updateBackupNote();
 $('#markImg').src=DEFAULT_LOGO;defaultLogo.onload=()=>schedule();defaultLogo.src=DEFAULT_LOGO;
 syncInputs();updateUI();renderLists();renderLines();updateEditBar();layoutStage();renderPreview();drawSwatches();
